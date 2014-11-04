@@ -20,10 +20,9 @@ public:
 	void Highlight(size_t page, bool highlight = true);
 	bool Highlighted(size_t page) const;
 
-	void OnNavigationKey(wxNavigationKeyEvent& event);
-
 	void AdvanceTab(bool forward);
 
+	bool AddPage(wxWindow *page, const wxString &text, bool select = false, int imageId = -1);
 protected:
 	std::vector<bool> m_highlighted;
 

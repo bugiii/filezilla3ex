@@ -29,7 +29,7 @@ class CWindowStateManager;
 #endif
 class CWindowStateManager;
 
-class CMainFrame : public wxFrame
+class CMainFrame : public wxNavigationEnabled<wxFrame>
 #if FZ_MANUALUPDATECHECK
 	, protected CUpdateHandler
 #endif
@@ -70,6 +70,8 @@ public:
 	bool ConnectToSite(CSiteManagerItemData_Site* const pData, bool newTab = false);
 
 protected:
+	void FixTabOrder();
+
 	bool CloseDialogsAndQuit(wxCloseEvent &event);
 	bool CreateMenus();
 	bool CreateQuickconnectBar();
@@ -141,7 +143,6 @@ protected:
 #endif //FZ_MANUALUPDATECHECK
 	void OnSitemanagerDropdown(wxCommandEvent& event);
 	void OnNavigationKeyEvent(wxNavigationKeyEvent& event);
-	void OnGetFocus(wxFocusEvent& event);
 	void OnChar(wxKeyEvent& event);
 	void OnActivate(wxActivateEvent& event);
 	void OnToolbarComparison(wxCommandEvent& event);
@@ -149,7 +150,9 @@ protected:
 	void OnDropdownComparisonMode(wxCommandEvent& event);
 	void OnDropdownComparisonHide(wxCommandEvent& event);
 	void OnSyncBrowse(wxCommandEvent& event);
-#ifndef __WXMAC__
+#ifdef __WXMAC__
+	void OnChildFocused(wxChildFocusEvent& event);
+#else
 	void OnIconize(wxIconizeEvent& event);
 	void OnTaskBarClick(wxTaskBarIconEvent&);
 #endif
@@ -185,6 +188,10 @@ protected:
 #endif
 
 	int m_comparisonToggleAcceleratorId{};
+
+#ifdef __WXMAC__
+	int m_lastFocusedChild{-1};
+#endif
 };
 
 #endif

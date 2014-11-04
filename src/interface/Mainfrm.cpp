@@ -118,7 +118,7 @@ bool HandleKeyboardCommand(wxCommandEvent& event, wxWindow& parent)
 	return true;
 }
 
-BEGIN_EVENT_TABLE(CMainFrame, wxFrame)
+BEGIN_EVENT_TABLE(CMainFrame, wxNavigationEnabled<wxFrame>)
 	EVT_SIZE(CMainFrame::OnSize)
 	EVT_MENU(wxID_ANY, CMainFrame::OnMenuHandler)
 	EVT_FZ_NOTIFICATION(wxID_ANY, CMainFrame::OnEngineEvent)
@@ -159,7 +159,6 @@ BEGIN_EVENT_TABLE(CMainFrame, wxFrame)
 	EVT_TOOL_DROPDOWN(XRCID("ID_TOOLBAR_SITEMANAGER"), CMainFrame::OnSitemanagerDropdown)
 #endif
 	EVT_NAVIGATION_KEY(CMainFrame::OnNavigationKeyEvent)
-	EVT_SET_FOCUS(CMainFrame::OnGetFocus)
 	EVT_CHAR_HOOK(CMainFrame::OnChar)
 	EVT_MENU(XRCID("ID_MENU_VIEW_FILTERS"), CMainFrame::OnFilter)
 	EVT_ACTIVATE(CMainFrame::OnActivate)
@@ -172,7 +171,9 @@ BEGIN_EVENT_TABLE(CMainFrame, wxFrame)
 	EVT_MENU(XRCID("ID_COMPARE_DATE"), CMainFrame::OnDropdownComparisonMode)
 	EVT_MENU(XRCID("ID_COMPARE_HIDEIDENTICAL"), CMainFrame::OnDropdownComparisonHide)
 	EVT_TOOL(XRCID("ID_TOOLBAR_SYNCHRONIZED_BROWSING"), CMainFrame::OnSyncBrowse)
-#ifndef __WXMAC__
+#ifdef __WXMAC__
+	EVT_CHILD_FOCUS(CMainFrame::OnChildFocused)
+#else
 	EVT_ICONIZE(CMainFrame::OnIconize)
 #endif
 #ifdef __WXGTK__
@@ -461,6 +462,8 @@ CMainFrame::CMainFrame()
 	CEditHandler::Create()->SetQueue(m_pQueueView);
 
 	CAutoAsciiFiles::SettingsChanged();
+
+	FixTabOrder();
 }
 
 CMainFrame::~CMainFrame()
@@ -840,6 +843,9 @@ void CMainFrame::OnMenuHandler(wxCommandEvent &event)
 	{
 		CServer server;
 		CState* pState = CContextManager::Get()->GetCurrentContext();
+		if (!pState) {
+			return;
+		}
 		const CServer* pServer = pState ? pState->GetServer() : 0;
 
 		CContextControl::_context_controls* controls = m_pContextControl->GetCurrentControls();
@@ -2135,69 +2141,18 @@ void CMainFrame::ConnectNavigationHandler(wxEvtHandler* handler)
 
 void CMainFrame::OnNavigationKeyEvent(wxNavigationKeyEvent& event)
 {
-	if (wxGetKeyState(WXK_CONTROL))
-	{
+	if (wxGetKeyState(WXK_CONTROL) && event.IsFromTab()) {
 		if (m_pContextControl)
 			m_pContextControl->AdvanceTab(event.GetDirection());
 		return;
 	}
 
-	std::list<wxWindow*> windowOrder;
-	if (m_pQuickconnectBar)
-		windowOrder.push_back(m_pQuickconnectBar);
-	if (m_pStatusView)
-		windowOrder.push_back(m_pStatusView);
-
-	CContextControl::_context_controls* controls = m_pContextControl ? m_pContextControl->GetCurrentControls() : 0;
-	if (controls) {
-		if (COptions::Get()->GetOptionVal(OPTION_FILEPANE_SWAP) == 0) {
-			windowOrder.push_back(controls->pLocalViewHeader);
-			windowOrder.push_back(controls->pLocalTreeView);
-			windowOrder.push_back(controls->pLocalListView);
-			windowOrder.push_back(controls->pRemoteViewHeader);
-			windowOrder.push_back(controls->pRemoteTreeView);
-			windowOrder.push_back(controls->pRemoteListView);
-		}
-		else {
-			windowOrder.push_back(controls->pRemoteViewHeader);
-			windowOrder.push_back(controls->pRemoteTreeView);
-			windowOrder.push_back(controls->pRemoteListView);
-			windowOrder.push_back(controls->pLocalViewHeader);
-			windowOrder.push_back(controls->pLocalTreeView);
-			windowOrder.push_back(controls->pLocalListView);
-		}
-	}
-	windowOrder.push_back(m_pQueuePane);
-
-	std::list<wxWindow*>::iterator iter;
-	for (iter = windowOrder.begin(); iter != windowOrder.end(); ++iter)
-	{
-		if (*iter == event.GetEventObject())
-			break;
-	}
-
-	bool skipFirst;
-	if (iter == windowOrder.end())
-	{
-		iter = windowOrder.begin();
-		skipFirst = false;
-	}
-	else
-		skipFirst = true;
-
-	FocusNextEnabled(windowOrder, iter, skipFirst, event.GetDirection());
-}
-
-void CMainFrame::OnGetFocus(wxFocusEvent& event)
-{
-	wxNavigationKeyEvent evt;
-	OnNavigationKeyEvent(evt);
+	event.Skip();
 }
 
 void CMainFrame::OnChar(wxKeyEvent& event)
 {
-	if (event.GetKeyCode() != WXK_F6)
-	{
+	if (event.GetKeyCode() != WXK_F6) {
 		event.Skip();
 		return;
 	}
@@ -2208,8 +2163,7 @@ void CMainFrame::OnChar(wxKeyEvent& event)
 	if (m_pQuickconnectBar)
 		windowOrder.push_back(m_pQuickconnectBar);
 	CContextControl::_context_controls* controls = m_pContextControl->GetCurrentControls();
-	if (controls)
-	{
+	if (controls) {
 		windowOrder.push_back(controls->pLocalViewHeader);
 		windowOrder.push_back(controls->pRemoteViewHeader);
 	}
@@ -2218,24 +2172,19 @@ void CMainFrame::OnChar(wxKeyEvent& event)
 
 	bool skipFirst = false;
 	std::list<wxWindow*>::iterator iter;
-	if (!focused)
-	{
+	if (!focused) {
 		iter = windowOrder.begin();
 		skipFirst = false;
 	}
-	else
-	{
+	else {
 		wxWindow *parent = focused->GetParent();
-		for (iter = windowOrder.begin(); iter != windowOrder.end(); ++iter)
-		{
-			if (*iter == focused || *iter == parent)
-			{
+		for (iter = windowOrder.begin(); iter != windowOrder.end(); ++iter) {
+			if (*iter == focused || *iter == parent) {
 				skipFirst = true;
 				break;
 			}
 		}
-		if (iter == windowOrder.end())
-		{
+		if (iter == windowOrder.end()) {
 			iter = windowOrder.begin();
 			skipFirst = false;
 		}
@@ -2375,6 +2324,15 @@ void CMainFrame::OnActivate(wxActivateEvent& event)
 
 	if (!event.GetActive())
 		return;
+
+#ifdef __WXMAC__
+	// wxMac looses focus information if the window becomes inactive.
+	// Restore focus to the previously focused child, otherwise focus ends up
+	// in the quickconnect bar.
+	// Go via ID of the last focused child to avoid issues with window lifetime.
+	if (m_lastFocusedChild != -1)
+		m_winLastFocused = FindWindow(m_lastFocusedChild);
+#endif
 
 	CEditHandler* pEditHandler = CEditHandler::Get();
 	if (pEditHandler)
@@ -2869,3 +2827,18 @@ void CMainFrame::OnToggleToolBar(wxCommandEvent& event)
 	HandleResize();
 #endif
 }
+
+void CMainFrame::FixTabOrder()
+{
+	if (m_pQuickconnectBar && m_pTopSplitter) {
+		m_pQuickconnectBar->MoveBeforeInTabOrder(m_pTopSplitter);
+	}
+}
+
+#ifdef __WXMAC__
+void CMainFrame::OnChildFocused(wxChildFocusEvent& event)
+{
+	m_lastFocusedChild = event.GetWindow()->GetId();
+}
+#endif
+
