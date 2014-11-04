@@ -238,10 +238,10 @@ void CTransferSocket::OnConnect()
 			return;
 		}
 	}
-	else if (m_pTlsSocket)
-	{
-		if (CServerCapabilities::GetCapability(*m_pControlSocket->m_pCurrentServer, tls_resume) == unknown)
-		{
+	else if (m_pTlsSocket) {
+		// Re-enable Nagle algorithm
+		m_pSocket->SetFlags(m_pSocket->GetFlags() & (~CSocket::flag_nodelay));
+		if (CServerCapabilities::GetCapability(*m_pControlSocket->m_pCurrentServer, tls_resume) == unknown)	{
 			CServerCapabilities::SetCapability(*m_pControlSocket->m_pCurrentServer, tls_resume, m_pTlsSocket->ResumedSession() ? yes : no);
 		}
 	}
@@ -756,6 +756,9 @@ void CTransferSocket::FinalizeWrite()
 
 bool CTransferSocket::InitTls(const CTlsSocket* pPrimaryTlsSocket)
 {
+	// Disable Nagle algorithm during TlS handshake
+	m_pSocket->SetFlags(m_pSocket->GetFlags() | CSocket::flag_nodelay);
+
 	wxASSERT(!m_pBackend);
 	m_pTlsSocket = new CTlsSocket(this, m_pSocket, m_pControlSocket);
 

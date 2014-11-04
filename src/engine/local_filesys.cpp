@@ -39,6 +39,9 @@ enum CLocalFileSystem::local_fileType CLocalFileSystem::GetFileType(const wxStri
 	if (result == INVALID_FILE_ATTRIBUTES)
 		return unknown;
 
+	if (result & FILE_ATTRIBUTE_REPARSE_POINT)
+		return link;
+
 	if (result & FILE_ATTRIBUTE_DIRECTORY)
 		return dir;
 
@@ -232,8 +235,47 @@ enum CLocalFileSystem::local_fileType CLocalFileSystem::GetFileInfo(const wxStri
 	if (mode)
 		*mode = (int)attributes.dwFileAttributes;
 
-	if (attributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-	{
+	if (attributes.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+		isLink = true;
+
+		HANDLE hFile = CreateFile(path, FILE_READ_ATTRIBUTES | FILE_READ_EA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+		if (hFile != INVALID_HANDLE_VALUE) {
+			BY_HANDLE_FILE_INFORMATION info{};
+			int ret = GetFileInformationByHandle(hFile, &info);
+			CloseHandle(hFile);
+			if (ret != 0 && !(info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+				
+				if (modificationTime) {
+					if (!ConvertFileTimeToCDateTime(*modificationTime, info.ftLastWriteTime))
+						ConvertFileTimeToCDateTime(*modificationTime, info.ftCreationTime);
+				}
+
+				if (mode)
+					*mode = (int)info.dwFileAttributes;
+
+				if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+					if (size)
+						*size = -1;
+					return dir;
+				}
+
+				if (size)
+					*size = wxLongLong(info.nFileSizeHigh, info.nFileSizeLow);
+
+				return file;
+			}
+		}
+		
+		if (size)
+			*size = -1;
+		if (mode)
+			*mode = 0;
+		if (modificationTime)
+			*modificationTime = CDateTime();
+		return unknown;
+	}
+
+	if (attributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
 		if (size)
 			*size = -1;
 		return dir;
@@ -362,10 +404,14 @@ bool CLocalFileSystem::BeginFindFiles(wxString path, bool dirs_only)
 
 	m_dirs_only = dirs_only;
 #ifdef __WXMSW__
-	if (path.Last() != '/' && path.Last() != '\\')
+	if (path.Last() != '/' && path.Last() != '\\') {
+		m_find_path = path + _T("\\");
 		path += _T("\\*");
-	else
+	}
+	else {
+		m_find_path = path;
 		path += '*';
+	}
 
 	m_hFind = FindFirstFileEx(path, FindExInfoStandard, &m_find_data, dirs_only ? FindExSearchLimitToDirectories : FindExSearchNameMatch, 0, 0);
 	if (m_hFind == INVALID_HANDLE_VALUE)
@@ -507,27 +553,69 @@ bool CLocalFileSystem::GetNextFile(wxString& name, bool &isLink, bool &is_dir, w
 			continue;
 		name = m_find_data.cFileName;
 
-		isLink = false;
+		isLink = (m_find_data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+		if (isLink) {
+			HANDLE hFile = CreateFile(m_find_path + name, FILE_READ_ATTRIBUTES | FILE_READ_EA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+			if (hFile != INVALID_HANDLE_VALUE) {
+				BY_HANDLE_FILE_INFORMATION info{};
+				int ret = GetFileInformationByHandle(hFile, &info);
+				CloseHandle(hFile);
+				if (ret != 0 && !(info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
 
-		if (modificationTime)
-			ConvertFileTimeToCDateTime(*modificationTime, m_find_data.ftLastWriteTime);
+					if (modificationTime) {
+						if (!ConvertFileTimeToCDateTime(*modificationTime, info.ftLastWriteTime))
+							ConvertFileTimeToCDateTime(*modificationTime, info.ftCreationTime);
+					}
 
-		if (mode)
-			*mode = (int)m_find_data.dwFileAttributes;
+					if (mode)
+						*mode = (int)info.dwFileAttributes;
 
-		if (m_find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-		{
-			is_dir = true;
-			if (size)
-				*size = -1;
-		}
-		else
-		{
+					if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+						if (size)
+							*size = -1;
+						return dir;
+					}
+
+					if (size)
+						*size = wxLongLong(info.nFileSizeHigh, info.nFileSizeLow);
+
+					m_found = FindNextFile(m_hFind, &m_find_data) != 0;
+					return true;
+				}
+			}
+
+			if (m_dirs_only) {
+				continue;
+			}
+
 			is_dir = false;
 			if (size)
-				*size = wxLongLong(m_find_data.nFileSizeHigh, m_find_data.nFileSizeLow);
+				*size = -1;
+			if (mode)
+				*mode = 0;
+			if (modificationTime)
+				*modificationTime = CDateTime();
 		}
+		else {
+			if (modificationTime)
+				ConvertFileTimeToCDateTime(*modificationTime, m_find_data.ftLastWriteTime);
 
+			if (mode)
+				*mode = (int)m_find_data.dwFileAttributes;
+
+			if (m_find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+			{
+				is_dir = true;
+				if (size)
+					*size = -1;
+			}
+			else
+			{
+				is_dir = false;
+				if (size)
+					*size = wxLongLong(m_find_data.nFileSizeHigh, m_find_data.nFileSizeLow);
+			}
+		}
 		m_found = FindNextFile(m_hFind, &m_find_data) != 0;
 		return true;
 	} while ((m_found = FindNextFile(m_hFind, &m_find_data) != 0));
@@ -651,14 +739,43 @@ bool CLocalFileSystem::SetModificationTime(const wxString& path, const CDateTime
 #endif
 }
 
-wxLongLong CLocalFileSystem::GetSize(const wxString& path)
+wxLongLong CLocalFileSystem::GetSize(wxString const& path, bool* isLink)
 {
 	wxLongLong ret = -1;
 	bool tmp;
-	local_fileType t = GetFileInfo(path, tmp, &ret, 0, 0);
+	local_fileType t = GetFileInfo(path, isLink ? *isLink : tmp, &ret, 0, 0);
 	if( t != file ) {
 		ret = -1;
 	}
 
 	return ret;
+}
+
+wxString CLocalFileSystem::GetSymbolicLinkTarget(wxString const& path)
+{
+	wxString target;
+
+#ifdef __WXMSW__
+	HANDLE hFile = CreateFile(path, FILE_READ_ATTRIBUTES | FILE_READ_EA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+	if (hFile != INVALID_HANDLE_VALUE) {
+		DWORD const size = 1024;
+		wxChar out[size];
+		DWORD ret = GetFinalPathNameByHandle(hFile, out, size, 0);
+		if (ret > 0 && ret < size) {
+			target = out;
+		}
+		CloseHandle(hFile);
+	}
+#else
+	size_t const size = 1024;
+	char out[size];
+
+	const wxCharBuffer p = path.fn_str();
+	ssize_t res = readlink(static_cast<char const*>(p), out, size);
+	if( res > 0 && static_cast<size_t>(res) < size ) {
+		out[res] = 0;
+		target = wxString(out, *wxConvFileName);
+	}
+#endif
+	return target;
 }

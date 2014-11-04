@@ -6,7 +6,7 @@
 // general too slow.
 // This class offers exactly what's needed by FileZilla and
 // exploits some platform-specific features.
-class CLocalFileSystem
+class CLocalFileSystem final
 {
 public:
 	CLocalFileSystem();
@@ -32,7 +32,7 @@ public:
 	static enum local_fileType GetFileInfo(const wxString& path, bool &isLink, wxLongLong* size, CDateTime* modificationTime, int* mode);
 
 	// Shortcut, returns -1 on error.
-	static wxLongLong GetSize(const wxString& path);
+	static wxLongLong GetSize(wxString const& path, bool *isLink = 0);
 
 	// If parent window is given, display confirmation dialog
 	// Returns false iff there's an encoding error, e.g. program
@@ -47,6 +47,9 @@ public:
 
 	static CDateTime GetModificationTime(const wxString& path);
 	static bool SetModificationTime(const wxString& path, const CDateTime& t);
+
+	static wxString GetSymbolicLinkTarget(wxString const& path);
+
 protected:
 #ifdef __WXMSW__
 	static bool ConvertFileTimeToCDateTime(CDateTime& time, const FILETIME &ft);
@@ -64,6 +67,7 @@ protected:
 	WIN32_FIND_DATA m_find_data;
 	HANDLE m_hFind;
 	bool m_found;
+	wxString m_find_path;
 #else
 	char* m_raw_path;
 	char* m_file_part; // Points into m_raw_path past the trailing slash of the path part

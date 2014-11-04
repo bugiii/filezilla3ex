@@ -56,7 +56,12 @@
 #endif
 #ifndef __WXMAC__
 #include <wx/taskbar.h>
+#else
+#include <wx/combobox.h>
 #endif
+
+#include <functional>
+#include <map>
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -76,6 +81,42 @@ static int GetAvailableUpdateMenuId()
 	return updateAvailableMenuId;
 }
 #endif
+
+std::map<int, std::pair<std::function<void(wxTextEntry*)>, wxChar>> keyboardCommands;
+
+wxTextEntry* GetSpecialTextEntry(wxWindow* w, wxChar cmd)
+{
+#ifdef __WXMAC__
+	if( cmd == 'A' || cmd == 'V' ) {
+		wxTextCtrl* text = dynamic_cast<wxTextCtrl*>(w);
+		if( text && text->GetWindowStyle() & wxTE_PASSWORD ) {
+			return text;
+		}
+	}
+	wxComboBox* combo = dynamic_cast<wxComboBox*>(w);
+	if( combo ) {
+		return combo;
+	}
+#endif
+	return 0;
+}
+
+bool HandleKeyboardCommand(wxCommandEvent& event, wxWindow& parent)
+{
+	auto const& it = keyboardCommands.find(event.GetId());
+	if( it == keyboardCommands.end() ) {
+		return false;
+	}
+
+	wxTextEntry* e = GetSpecialTextEntry(parent.FindFocus(), it->second.second);
+	if( e ) {
+		it->second.first(e);
+	}
+	else {
+		event.Skip();
+	}
+	return true;
+}
 
 BEGIN_EVENT_TABLE(CMainFrame, wxFrame)
 	EVT_SIZE(CMainFrame::OnSize)
@@ -218,6 +259,13 @@ protected:
 CMainFrame::CMainFrame()
 	: m_comparisonToggleAcceleratorId(wxNewId())
 {
+#ifdef __WXMAC__
+	keyboardCommands[wxNewId()] = std::make_pair([](wxTextEntry* e){ e->Cut(); }, 'X');
+	keyboardCommands[wxNewId()] = std::make_pair([](wxTextEntry* e){ e->Copy(); }, 'C');
+	keyboardCommands[wxNewId()] = std::make_pair([](wxTextEntry* e){ e->Paste(); }, 'V');
+	keyboardCommands[wxNewId()] = std::make_pair([](wxTextEntry* e){ e->SelectAll(); }, 'A');
+#endif
+
 	m_pActivityLed[0] = m_pActivityLed[1] = 0;
 
 	wxGetApp().AddStartupProfileRecord(_T("CMainFrame::CMainFrame"));
@@ -392,16 +440,19 @@ CMainFrame::CMainFrame()
 	if (!RestoreSplitterPositions())
 		SetDefaultSplitterPositions();
 
-	wxAcceleratorEntry entries[11];
+	std::vector<wxAcceleratorEntry> entries;
 	//entries[0].Set(wxACCEL_CMD | wxACCEL_SHIFT, 'I', XRCID("ID_MENU_VIEW_FILTERS"));
-	for (int i = 0; i < 10; i++)
-	{
+	for (int i = 0; i < 10; i++) {
 		tab_hotkey_ids[i] = wxNewId();
-		entries[i].Set(wxACCEL_CMD, (int)'0' + i, tab_hotkey_ids[i]);
+		entries.push_back(wxAcceleratorEntry(wxACCEL_CMD, (int)'0' + i, tab_hotkey_ids[i]));
 	}
-	entries[10].Set(wxACCEL_CMD | wxACCEL_SHIFT, 'O', m_comparisonToggleAcceleratorId);
-
-	wxAcceleratorTable accel(sizeof(entries) / sizeof(wxAcceleratorEntry), entries);
+	entries.push_back(wxAcceleratorEntry(wxACCEL_CMD | wxACCEL_SHIFT, 'O', m_comparisonToggleAcceleratorId));
+#ifdef __WXMAC__
+	for (auto it = keyboardCommands.begin(); it != keyboardCommands.end(); ++it) {
+		entries.push_back(wxAcceleratorEntry(wxACCEL_CMD, it->second.second, it->first));
+	}
+#endif
+	wxAcceleratorTable accel(entries.size(), &entries[0]);
 	SetAcceleratorTable(accel);
 
 	ConnectNavigationHandler(m_pStatusView);
@@ -871,6 +922,9 @@ void CMainFrame::OnMenuHandler(wxCommandEvent &event)
 		if (pComparisonManager && pComparisonManager->IsComparing())
 			pComparisonManager->CompareListings();
 	}
+	else if (HandleKeyboardCommand(event, *this)) {
+		return;
+	}
 	else
 	{
 		for (int i = 0; i < 10; i++)
@@ -1185,28 +1239,23 @@ bool CMainFrame::CloseDialogsAndQuit(wxCloseEvent &event)
 
 void CMainFrame::OnClose(wxCloseEvent &event)
 {
-	if (!m_bQuit)
-	{
+	if (!m_bQuit) {
 		static bool quit_confirmation_displayed = false;
-		if (quit_confirmation_displayed && event.CanVeto())
-		{
+		if (quit_confirmation_displayed && event.CanVeto()) {
 			event.Veto();
 			return;
 		}
-		if (event.CanVeto())
-		{
+		if (event.CanVeto()) {
 			quit_confirmation_displayed = true;
 
-			if (m_pQueueView && m_pQueueView->IsActive())
-			{
+			if (m_pQueueView && m_pQueueView->IsActive()) {
 				CConditionalDialog dlg(this, CConditionalDialog::confirmexit, CConditionalDialog::yesno);
 				dlg.SetTitle(_("Close FileZilla"));
 
 				dlg.AddText(_("File transfers still in progress."));
 				dlg.AddText(_("Do you really want to close FileZilla?"));
 
-				if (!dlg.Run())
-				{
+				if (!dlg.Run()) {
 					event.Veto();
 					quit_confirmation_displayed = false;
 					return;
@@ -1216,8 +1265,7 @@ void CMainFrame::OnClose(wxCloseEvent &event)
 			}
 
 			CEditHandler* pEditHandler = CEditHandler::Get();
-			if (pEditHandler)
-			{
+			if (pEditHandler) {
 				if (pEditHandler->GetFileCount(CEditHandler::remote, CEditHandler::edit) || pEditHandler->GetFileCount(CEditHandler::none, CEditHandler::upload) ||
 					pEditHandler->GetFileCount(CEditHandler::none, CEditHandler::upload_and_remove) ||
 					pEditHandler->GetFileCount(CEditHandler::none, CEditHandler::upload_and_remove_failed))
@@ -1229,8 +1277,7 @@ void CMainFrame::OnClose(wxCloseEvent &event)
 					dlg.AddText(_("If you close FileZilla, your changes will be lost."));
 					dlg.AddText(_("Do you really want to close FileZilla?"));
 
-					if (!dlg.Run())
-					{
+					if (!dlg.Run()) {
 						event.Veto();
 						quit_confirmation_displayed = false;
 						return;
@@ -1242,8 +1289,7 @@ void CMainFrame::OnClose(wxCloseEvent &event)
 			quit_confirmation_displayed = false;
 		}
 
-		if (m_pWindowStateManager)
-		{
+		if (m_pWindowStateManager) {
 			m_pWindowStateManager->Remember(OPTION_MAINWINDOW_POSITION);
 			delete m_pWindowStateManager;
 			m_pWindowStateManager = 0;
@@ -1288,13 +1334,15 @@ void CMainFrame::OnClose(wxCloseEvent &event)
 
 	bool res = true;
 	const std::vector<CState*> *pStates = CContextManager::Get()->GetAllStates();
-	for (std::vector<CState*>::const_iterator iter = pStates->begin(); iter != pStates->end(); ++iter) {
-		CState* pState = *iter;
-		if (!pState->m_pCommandQueue)
-			continue;
-
-		if (!pState->m_pCommandQueue->Cancel())
-			res = false;
+	for (CState* pState : *pStates) {
+		if( pState->GetRecursiveOperationHandler() ) {
+			pState->GetRecursiveOperationHandler()->StopRecursiveOperation();
+		}
+	
+		if (pState->m_pCommandQueue) {
+			if (!pState->m_pCommandQueue->Quit())
+				res = false;
+		}
 	}
 
 	if (!res) {
@@ -1305,23 +1353,20 @@ void CMainFrame::OnClose(wxCloseEvent &event)
 	}
 
 	CContextControl::_context_controls* controls = m_pContextControl ? m_pContextControl->GetCurrentControls() : 0;
-	if (controls)
-	{
+	if (controls) {
 		COptions::Get()->SetLastServer(controls->pState->GetLastServer());
 		COptions::Get()->SetOption(OPTION_LASTSERVERPATH, controls->pState->GetLastServerPath().GetSafePath());
-		COptions::Get()->SetOption(OPTION_LAST_CONNECTED_SITE, controls->site_bookmarks->path);
+		COptions::Get()->SetOption(OPTION_LAST_CONNECTED_SITE, controls->site_bookmarks ? controls->site_bookmarks->path : wxString());
 	}
 
-	for (std::vector<CState*>::const_iterator iter = pStates->begin(); iter != pStates->end(); ++iter)
-	{
+	for (std::vector<CState*>::const_iterator iter = pStates->begin(); iter != pStates->end(); ++iter) {
 		CState *pState = *iter;
 		pState->DestroyEngine();
 	}
 
 	CSiteManager::ClearIdMap();
 
-	if (controls)
-	{
+	if (controls) {
 		controls->pLocalListView->SaveColumnSettings(OPTION_LOCALFILELIST_COLUMN_WIDTHS, OPTION_LOCALFILELIST_COLUMN_SHOWN, OPTION_LOCALFILELIST_COLUMN_ORDER);
 		controls->pRemoteListView->SaveColumnSettings(OPTION_REMOTEFILELIST_COLUMN_WIDTHS, OPTION_REMOTEFILELIST_COLUMN_SHOWN, OPTION_REMOTEFILELIST_COLUMN_ORDER);
 	}
@@ -2803,8 +2848,10 @@ bool CMainFrame::ConnectToServer(const CServer &server, const CServerPath &path 
 	}
 
 	CContextControl::_context_controls* controls = m_pContextControl->GetControlsFromState(pState);
-	if (!isReconnect && controls)
+	if (!isReconnect && controls) {
 		controls->site_bookmarks.reset();
+		m_pMenuBar->ClearBookmarks();
+	}
 
 	return pState->Connect(server, path);
 }
